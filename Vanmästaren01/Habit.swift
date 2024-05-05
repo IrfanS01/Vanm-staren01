@@ -12,4 +12,6 @@ struct Habit: Identifiable, Codable {
     var name: String
     var streak: Int
     var isCompletedToday: Bool
+    var totalDays: Int = 0
+    var completionDates: [Date] = []
 }
