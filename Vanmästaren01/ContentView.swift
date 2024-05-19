@@ -26,7 +26,6 @@ struct ContentView: View {
                             Spacer()
 
                             Button(action: {
-                                // Toggle the completion state of the habit
                                 habitsViewModel.toggleHabitCompletion(habitId: habit.id)
                             }) {
                                 Image(systemName: habit.isCompletedToday ? "checkmark.circle.fill" : "circle")
@@ -55,13 +54,32 @@ struct ContentView: View {
                 VStack {
                     TextField("Enter habit name", text: $newHabitName)
                         .padding()
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                    Toggle(isOn: $isCompletedToday) {
+                        Text("Completed Today")
+                    }
+                    .padding()
+
                     Button("Add Habit") {
                         habitsViewModel.addHabit(name: newHabitName, streak: newHabitStreak, isCompletedToday: isCompletedToday)
                         self.newHabitName = ""
+                        self.newHabitStreak = 0
+                        self.isCompletedToday = false
+                        self.showingAddHabit = false
+                    }
+                    .padding()
+                    .disabled(newHabitName.isEmpty)
+
+                    Button("Cancel") {
+                        self.newHabitName = ""
+                        self.newHabitStreak = 0
+                        self.isCompletedToday = false
                         self.showingAddHabit = false
                     }
                     .padding()
                 }
+                .padding()
             }
         }
     }

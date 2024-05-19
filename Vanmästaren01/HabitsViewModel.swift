@@ -12,18 +12,26 @@ import Firebase
 class HabitsViewModel: ObservableObject {
     @Published var habits: [Habit] = []
     private var db = Firestore.firestore()
+    private var listener: ListenerRegistration?
+    private var timer: Timer?
 
     init() {
         loadHabits()
+        startDailyCheckTimer()
+    }
+
+    deinit {
+        listener?.remove()
+        timer?.invalidate()
     }
 
     func loadHabits() {
-        db.collection("habits").addSnapshotListener { (querySnapshot, error) in
+        listener = db.collection("habits").addSnapshotListener { (querySnapshot, error) in
             guard let documents = querySnapshot?.documents else {
                 print("No documents or error: \(error?.localizedDescription ?? "Unknown error")")
                 return
             }
-            
+
             var newHabits: [Habit] = []
             let group = DispatchGroup()
 
@@ -52,23 +60,66 @@ class HabitsViewModel: ObservableObject {
 
             group.notify(queue: .main) {
                 self.habits = newHabits.sorted { $0.name < $1.name }
-                self.updateStreak() // Ažurirajte streak nakon što se navike učitaju
+                self.checkAndResetCompletionStatus()
+                self.updateStreak()
             }
         }
     }
-    
-    func updateStreak() {
+
+    func checkAndResetCompletionStatus() {
+        let calendar = Calendar.current
+        let currentDate = Date()
+
         for index in 0..<habits.count {
             if let lastCompletionDate = habits[index].completionDates.last {
-                if Calendar.current.isDateInYesterday(lastCompletionDate) {
-                    habits[index].streak += 1
-                } else if !Calendar.current.isDateInToday(lastCompletionDate) {
-                    habits[index].streak = 0
+                if !calendar.isDate(lastCompletionDate, inSameDayAs: currentDate) {
+                    habits[index].isCompletedToday = false
+                    updateHabit(habits[index])
                 }
-                
-                // Ažuriranje Firestore dokumenta
-                db.collection("habits").document(habits[index].id).updateData([
-                    "streak": habits[index].streak
+            } else {
+                habits[index].isCompletedToday = false
+                updateHabit(habits[index])
+            }
+        }
+    }
+
+    func startDailyCheckTimer() {
+        checkAndResetCompletionStatus()
+
+        timer = Timer.scheduledTimer(withTimeInterval: 60 * 60 * 24, repeats: true) { _ in
+            self.checkAndResetCompletionStatus()
+        }
+    }
+
+    func updateStreak() {
+        let calendar = Calendar.current
+        
+        for index in 0..<habits.count {
+            var habit = habits[index]
+            let sortedDates = habit.completionDates.sorted()
+            var currentStreak = 0
+            var lastDate = sortedDates.last ?? Date()
+
+            for date in sortedDates.reversed() {
+                if calendar.isDateInToday(date) {
+                    continue
+                } else if calendar.isDate(lastDate, inSameDayAs: date) {
+                    continue
+                } else if let dayBefore = calendar.date(byAdding: .day, value: -1, to: lastDate),
+                          calendar.isDate(dayBefore, inSameDayAs: date) {
+                    currentStreak += 1
+                    lastDate = date
+                } else {
+                    break
+                }
+            }
+
+            if habit.streak != currentStreak {
+                habit.streak = currentStreak
+                habits[index] = habit
+
+                db.collection("habits").document(habit.id).updateData([
+                    "streak": habit.streak
                 ]) { error in
                     if let error = error {
                         print("Error updating document: \(error)")
@@ -97,7 +148,7 @@ class HabitsViewModel: ObservableObject {
             if let error = error {
                 print("Error adding document: \(error)")
             } else {
-                self.loadHabits()  // Reload the habits after adding a new one
+                self.loadHabits()
             }
         }
     }
@@ -109,7 +160,7 @@ class HabitsViewModel: ObservableObject {
                 if let error = error {
                     print("Error removing document: \(error)")
                 } else {
-                    self.loadHabits() // Reload the habits after deletion
+                    self.loadHabits()
                 }
             }
         }
@@ -119,29 +170,31 @@ class HabitsViewModel: ObservableObject {
         if let index = habits.firstIndex(where: { $0.id == habitId }) {
             var habit = habits[index]
             habit.isCompletedToday = true
+            habit.totalDays += 1
             habit.completionDates.append(Date())
             habits[index] = habit
             updateHabit(habit)
         }
     }
-    
+
     func toggleHabitCompletion(habitId: String) {
         if let index = habits.firstIndex(where: { $0.id == habitId }) {
             var habit = habits[index]
-            habit.isCompletedToday.toggle()  // Prebacuje stanje izvršenosti
+            habit.isCompletedToday.toggle()
 
             if habit.isCompletedToday {
-                // Dodaj trenutni datum ako je navika označena kao izvršena
                 habit.completionDates.append(Date())
+                habit.totalDays += 1
             } else {
-                // Ukloni posljednji datum ako navika više nije označena kao izvršena
-                habit.completionDates.removeLast()
+                if !habit.completionDates.isEmpty {
+                    habit.completionDates.removeLast()
+                    habit.totalDays -= 1
+                }
             }
             habits[index] = habit
             updateHabit(habit)
         }
     }
-
 
     func updateHabit(_ habit: Habit) {
         let habitRef = db.collection("habits").document(habit.id)
@@ -149,6 +202,7 @@ class HabitsViewModel: ObservableObject {
             "name": habit.name,
             "streak": habit.streak,
             "isCompletedToday": habit.isCompletedToday,
+            "totalDays": habit.totalDays,
             "completionDates": habit.completionDates.map { $0.timeIntervalSince1970 }
         ]) { error in
             if let error = error {
